@@ -21,16 +21,23 @@ fn main() -> io::Result<()> {
 
     let regex = Regex::new(&env::args().nth(2).unwrap_or(String::from(".*"))).unwrap();
 
+    let git_ignores = GitIgnore::new(".gitignore").unwrap();
+    let other_ignores = GitIgnore::new(&env::args().nth(3).unwrap_or(".ignore".into())).unwrap();
+
     while let Ok(path) = path_receiver.recv_timeout(Duration::from_millis(200)) {
         let path_sender = path_sender2.clone();
         let regex = regex.clone();
+        let git_ignores = git_ignores.clone();
+        let other_ignores = other_ignores.clone();
         pool.execute(move || {
             visit_dir(&path, |entry| {
+                let path: String = entry.path().to_str().unwrap().to_string();
                 if entry.path().is_dir() {
-                    path_sender
-                        .send(entry.path().to_str().unwrap().to_string())
-                        .expect("send");
-                } else if entry.path().is_file() {
+                    path_sender.send(path).expect("send");
+                } else if entry.path().is_file()
+                    && !git_ignores.ignored(&path)
+                    && !other_ignores.ignored(&path)
+                {
                     grep_file(&regex, entry.path().to_str().unwrap());
                 }
             })
@@ -82,5 +89,31 @@ fn grep_file(regex: &Regex, path: &str) {
         if regex.is_match(&line) {
             println!("{}:{}:{}", path, i, line);
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct GitIgnore {
+    ignores: Vec<glob::Pattern>,
+}
+
+impl GitIgnore {
+    fn new(path: &str) -> Result<GitIgnore, io::Error> {
+        let ignores = match File::open(path) {
+            Err(e) => {
+                eprintln!("ERROR: Error opening .gitignore {} {:?}", e, e.kind());
+                Vec::new()
+            }
+            Ok(f) => BufReader::new(f)
+                .lines()
+                .map(|pattern| glob::Pattern::new(&pattern.unwrap()).unwrap())
+                .collect::<Vec<glob::Pattern>>(),
+        };
+
+        Ok(GitIgnore { ignores })
+    }
+
+    fn ignored(&self, path: &str) -> bool {
+        self.ignores.iter().any(|ignore| ignore.matches(path))
     }
 }
