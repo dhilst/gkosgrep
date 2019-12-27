@@ -23,6 +23,7 @@ fn main() -> io::Result<()> {
 
     let git_ignores = GitIgnore::new(".gitignore").unwrap();
     let other_ignores = GitIgnore::new(&env::args().nth(3).unwrap_or(".ignore".into())).unwrap();
+    let specials = ["./.", "./..", "./.git"];
 
     while let Ok(path) = path_receiver.recv_timeout(Duration::from_millis(200)) {
         let path_sender = path_sender2.clone();
@@ -32,7 +33,7 @@ fn main() -> io::Result<()> {
         pool.execute(move || {
             visit_dir(&path, |entry| {
                 let path: String = entry.path().to_str().unwrap().to_string();
-                if entry.path().is_dir() {
+                if entry.path().is_dir() && !specials.iter().any(|s| s == &path) {
                     path_sender.send(path).expect("send");
                 } else if entry.path().is_file()
                     && !git_ignores.ignored(&path)
@@ -68,7 +69,10 @@ fn grep_file(regex: &Regex, path: &str) {
     let file = File::open(path).unwrap();
     let reader = BufReader::new(file);
     let mut iter = reader.lines().enumerate();
-    let (_, line) = iter.next().unwrap();
+    let (_, line) = match iter.next() {
+        None => return,
+        Some(line) => line,
+    };
     // We only need to check if file is text once,
     // we expect `inspect(line).is_text()` to return
     // true to all lines of the same file
@@ -101,12 +105,15 @@ impl GitIgnore {
     fn new(path: &str) -> Result<GitIgnore, io::Error> {
         let ignores = match File::open(path) {
             Err(e) => {
-                eprintln!("ERROR: Error opening .gitignore {} {:?}", e, e.kind());
+                match e.kind() {
+                    ErrorKind::NotFound => {}
+                    _ => eprintln!("ERROR: Error opening {} {} {:?}", path, e, e.kind()),
+                };
                 Vec::new()
             }
             Ok(f) => BufReader::new(f)
                 .lines()
-                .map(|pattern| glob::Pattern::new(&pattern.unwrap()).unwrap())
+                .map(|pattern| glob::Pattern::new(&format!("./{}", pattern.unwrap())).unwrap())
                 .collect::<Vec<glob::Pattern>>(),
         };
 
