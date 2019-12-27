@@ -60,20 +60,25 @@ where
 fn grep_file(regex: &Regex, path: &str) {
     let file = File::open(path).unwrap();
     let reader = BufReader::new(file);
-    for (i, line) in reader.lines().enumerate() {
-        if let Err(err) = line {
-            match err.kind() {
-                ErrorKind::InvalidData => {}
-                _ => eprintln!("ERROR: {} <{:?}> {}", err, err.kind(), path),
+    let mut iter = reader.lines().enumerate();
+    let (_, line) = iter.next().unwrap();
+    if !inspect(line.unwrap_or("".into()).as_bytes()).is_text() {
+        return;
+    }
+    for (i, line) in iter {
+        let line = match line {
+            Err(err) => {
+                match err.kind() {
+                    ErrorKind::InvalidData => {}
+                    _ => eprintln!("ERROR: {} <{:?}> {}", err, err.kind(), path),
+                }
+                continue;
             }
-            continue;
-        }
-        let line = line.unwrap();
-        if i == 0 {
-            if !inspect(line.as_bytes()).is_text() {
-                return;
-            }
-        }
+            Ok(line) => line,
+        };
+        // We only need to check if file is text once,
+        // we expect `inspect(line).is_text()` to return
+        // true to all lines of the same file
         if regex.is_match(&line) {
             println!("{}:{}:{}", path, i, line);
         }
