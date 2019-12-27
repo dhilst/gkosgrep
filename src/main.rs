@@ -62,6 +62,9 @@ fn grep_file(regex: &Regex, path: &str) {
     let reader = BufReader::new(file);
     let mut iter = reader.lines().enumerate();
     let (_, line) = iter.next().unwrap();
+    // We only need to check if file is text once,
+    // we expect `inspect(line).is_text()` to return
+    // true to all lines of the same file
     if !inspect(line.unwrap_or("".into()).as_bytes()).is_text() {
         return;
     }
@@ -76,9 +79,6 @@ fn grep_file(regex: &Regex, path: &str) {
             }
             Ok(line) => line,
         };
-        // We only need to check if file is text once,
-        // we expect `inspect(line).is_text()` to return
-        // true to all lines of the same file
         if regex.is_match(&line) {
             println!("{}:{}:{}", path, i, line);
         }
