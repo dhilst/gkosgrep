@@ -12,25 +12,23 @@ static THREAD_NUM: usize = 4;
 
 fn main() -> io::Result<()> {
     let pool = ThreadPool::new(THREAD_NUM);
-    let (tx, rx) = channel::<String>();
-    tx.send(env::args().nth(1).unwrap().to_string())
+    let (path_sender, path_receiver) = channel::<String>();
+    path_sender
+        .send(env::args().nth(1).unwrap().to_string())
         .expect("send");
-    let tx2 = tx.clone();
-    drop(tx);
+    let path_sender2 = path_sender.clone();
+    drop(path_sender);
 
-    let pattern = match env::args().nth(2) {
-        Some(p) => p,
-        None => String::from(".*"),
-    };
-    let regex = Regex::new(&pattern).unwrap();
+    let regex = Regex::new(&env::args().nth(2).unwrap_or(String::from(".*"))).unwrap();
 
-    while let Ok(path) = rx.recv_timeout(Duration::from_millis(200)) {
-        let tx = tx2.clone();
+    while let Ok(path) = path_receiver.recv_timeout(Duration::from_millis(200)) {
+        let path_sender = path_sender2.clone();
         let regex = regex.clone();
         pool.execute(move || {
             visit_dir(&path, |entry| {
                 if entry.path().is_dir() {
-                    tx.send(entry.path().to_str().unwrap().to_string())
+                    path_sender
+                        .send(entry.path().to_str().unwrap().to_string())
                         .expect("send");
                 } else if entry.path().is_file() {
                     grep_file(&regex, entry.path().to_str().unwrap());
@@ -71,7 +69,12 @@ fn grep_file(regex: &Regex, path: &str) {
             continue;
         }
         let line = line.unwrap();
-        if inspect(line.as_bytes()).is_text() && regex.is_match(&line) {
+        if i == 0 {
+            if !inspect(line.as_bytes()).is_text() {
+                return;
+            }
+        }
+        if regex.is_match(&line) {
             println!("{}:{}:{}", path, i, line);
         }
     }
