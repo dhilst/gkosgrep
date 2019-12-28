@@ -4,74 +4,55 @@ use regex::Regex;
 use std::env;
 use std::fs::{self, DirEntry, File};
 use std::io::{self, prelude::*, BufReader, ErrorKind};
-use std::sync::mpsc::channel;
 use std::sync::Arc;
-use std::time::Duration;
 use threadpool::ThreadPool;
 
 static THREAD_NUM: usize = 4;
 
 fn main() -> io::Result<()> {
     let pool = ThreadPool::new(THREAD_NUM);
-    let (path_sender, path_receiver) = channel::<String>();
-    path_sender
-        .send(env::args().nth(1).unwrap().to_string())
-        .expect("send");
-    let path_sender2 = path_sender.clone();
-    drop(path_sender);
-
+    let path = env::args().nth(1).expect("1th argument not provided");
     let regex = Arc::new(Regex::new(&env::args().nth(2).unwrap_or(String::from(".*"))).unwrap());
     let git_ignores = Arc::new(GitIgnore::new(".gitignore").unwrap());
     let other_ignores =
         Arc::new(GitIgnore::new(&env::args().nth(3).unwrap_or(".ignore".into())).unwrap());
-    let specials = ["./.", "./..", "./.git"];
 
-    loop {
-        let pool = pool.clone();
-        let path = path_receiver.recv_timeout(Duration::from_millis(200));
-        if path.is_err() {
-            if pool.queued_count() == 0 {
-                break;
-            } else {
-                continue;
-            }
-        }
-        let path = path.unwrap();
-        let path_sender = path_sender2.clone();
-        let regex = regex.clone();
+    walk_dir(&path, &|entry: DirEntry| {
+        let path = entry.path().to_str().unwrap().to_string();
         let git_ignores = git_ignores.clone();
         let other_ignores = other_ignores.clone();
-        pool.execute(move || {
-            visit_dir(&path, |entry| {
-                let path: String = entry.path().to_str().unwrap().to_string();
-                if entry.path().is_dir() && !specials.iter().any(|s| s == &path) {
-                    path_sender.send(path).expect("send");
-                } else if entry.path().is_file()
-                    && !git_ignores.ignored(&path)
-                    && !other_ignores.ignored(&path)
-                {
-                    grep_file(&regex, entry.path().to_str().unwrap());
-                }
-            })
-        });
-    }
+        let regex = regex.clone();
+        if entry.path().is_file() && !git_ignores.ignored(&path) && !other_ignores.ignored(&path) {
+            pool.execute(move || grep_file(&regex, &path));
+        }
+    });
 
     pool.join();
 
     Ok(())
 }
 
-fn visit_dir<F>(path: &str, cb: F) -> ()
+fn walk_dir<F>(path: &str, cb: &F) -> ()
 where
     F: Fn(DirEntry) -> (),
 {
+    let specials = ["./.", "./..", "./.git"];
     match fs::read_dir(path) {
         Ok(readdir) => {
             for entry in readdir {
                 if entry.is_err() {
                     continue;
                 }
-                cb(entry.unwrap());
+                let entry = entry.unwrap();
+                let is_dir = entry.path().is_dir();
+                let path = entry.path().to_str().unwrap().to_string();
+                if specials.iter().any(|pattern| &path == pattern) {
+                    continue;
+                }
+                cb(entry);
+                if is_dir {
+                    walk_dir(&path, cb);
+                }
             }
         }
         Err(e) => eprintln!("ERROR: {:?} {} {}", e.kind(), e, path),
