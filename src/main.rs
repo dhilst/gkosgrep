@@ -95,7 +95,7 @@ struct GitIgnore {
 }
 
 impl GitIgnore {
-    pub fn new(path: &str) -> Result<GitIgnore, io::Error> {
+    pub fn new(path: &str) -> Result<Self, io::Error> {
         let mut o = GitIgnore {
             ignores: Vec::new(),
         };
