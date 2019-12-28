@@ -64,13 +64,23 @@ fn grep_file(regex: &Regex, path: &str) {
     let mut iter = reader.lines().enumerate();
     let (_, line) = match iter.next() {
         None => return,
-        Some(line) => line,
+        Some(line) => match line {
+            (n, Ok(l)) => (n, l),
+            (n, Err(e)) => {
+                eprintln!("ERROR grep_file {}", e);
+                (n, "".into())
+            }
+        },
     };
     // We only need to check if file is text once,
     // we expect `inspect(line).is_text()` to return
     // true to all lines of the same file
-    if !inspect(line.unwrap_or("".into()).as_bytes()).is_text() {
+    let line2 = line.clone();
+    if !inspect(line2.as_bytes()).is_text() {
         return;
+    }
+    if regex.is_match(&line) {
+        println!("{}:{}:{}", path, 0, line);
     }
     for (i, line) in iter {
         let line = match line {
