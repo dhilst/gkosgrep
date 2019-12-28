@@ -13,16 +13,15 @@ fn main() -> io::Result<()> {
     let pool = ThreadPool::new(THREAD_NUM);
     let path = env::args().nth(1).expect("1th argument not provided");
     let regex = Arc::new(Regex::new(&env::args().nth(2).unwrap_or(String::from(".*"))).unwrap());
-    let git_ignores = Arc::new(GitIgnore::new(".gitignore").unwrap());
-    let other_ignores =
-        Arc::new(GitIgnore::new(&env::args().nth(3).unwrap_or(".ignore".into())).unwrap());
+    let mut ignore = GitIgnore::new(".gitignore").unwrap();
+    ignore.add(&env::args().nth(3).unwrap_or(".ignore".into()))?;
+    let ignore = Arc::new(ignore);
 
     walk_dir(&path, &|entry: DirEntry| {
         let path = entry.path().to_str().unwrap().to_string();
-        let git_ignores = git_ignores.clone();
-        let other_ignores = other_ignores.clone();
+        let ignore = ignore.clone();
         let regex = regex.clone();
-        if entry.path().is_file() && !git_ignores.ignored(&path) && !other_ignores.ignored(&path) {
+        if entry.path().is_file() && !ignore.ignored(&path) {
             pool.execute(move || grep_file(&regex, &path));
         }
     });
@@ -96,7 +95,27 @@ struct GitIgnore {
 }
 
 impl GitIgnore {
-    fn new(path: &str) -> Result<GitIgnore, io::Error> {
+    pub fn new(path: &str) -> Result<GitIgnore, io::Error> {
+        let mut o = GitIgnore {
+            ignores: Vec::new(),
+        };
+        o.add(path)?;
+
+        Ok(o)
+    }
+
+    pub fn ignored(&self, path: &str) -> bool {
+        self.ignores.iter().any(|ignore| ignore.matches(path))
+    }
+
+    pub fn add(&mut self, path: &str) -> Result<(), io::Error> {
+        let mut f = Self::open(path)?;
+        self.ignores.append(&mut f);
+
+        Ok(())
+    }
+
+    fn open(path: &str) -> Result<Vec<glob::Pattern>, io::Error> {
         let ignores = match File::open(path) {
             Err(e) => {
                 match e.kind() {
@@ -110,11 +129,6 @@ impl GitIgnore {
                 .map(|pattern| glob::Pattern::new(&format!("./{}", pattern.unwrap())).unwrap())
                 .collect::<Vec<glob::Pattern>>(),
         };
-
-        Ok(GitIgnore { ignores })
-    }
-
-    fn ignored(&self, path: &str) -> bool {
-        self.ignores.iter().any(|ignore| ignore.matches(path))
+        Ok(ignores)
     }
 }
