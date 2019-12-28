@@ -5,6 +5,7 @@ use std::env;
 use std::fs::{self, DirEntry, File};
 use std::io::{self, prelude::*, BufReader, ErrorKind};
 use std::sync::mpsc::channel;
+use std::sync::Arc;
 use std::time::Duration;
 use threadpool::ThreadPool;
 
@@ -19,13 +20,23 @@ fn main() -> io::Result<()> {
     let path_sender2 = path_sender.clone();
     drop(path_sender);
 
-    let regex = Regex::new(&env::args().nth(2).unwrap_or(String::from(".*"))).unwrap();
-
-    let git_ignores = GitIgnore::new(".gitignore").unwrap();
-    let other_ignores = GitIgnore::new(&env::args().nth(3).unwrap_or(".ignore".into())).unwrap();
+    let regex = Arc::new(Regex::new(&env::args().nth(2).unwrap_or(String::from(".*"))).unwrap());
+    let git_ignores = Arc::new(GitIgnore::new(".gitignore").unwrap());
+    let other_ignores =
+        Arc::new(GitIgnore::new(&env::args().nth(3).unwrap_or(".ignore".into())).unwrap());
     let specials = ["./.", "./..", "./.git"];
 
-    while let Ok(path) = path_receiver.recv_timeout(Duration::from_millis(200)) {
+    loop {
+        let pool = pool.clone();
+        let path = path_receiver.recv_timeout(Duration::from_millis(200));
+        if path.is_err() {
+            if pool.queued_count() == 0 {
+                break;
+            } else {
+                continue;
+            }
+        }
+        let path = path.unwrap();
         let path_sender = path_sender2.clone();
         let regex = regex.clone();
         let git_ignores = git_ignores.clone();
@@ -44,6 +55,8 @@ fn main() -> io::Result<()> {
             })
         });
     }
+
+    pool.join();
 
     Ok(())
 }
@@ -96,7 +109,7 @@ fn grep_file(regex: &Regex, path: &str) {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct GitIgnore {
     ignores: Vec<glob::Pattern>,
 }
