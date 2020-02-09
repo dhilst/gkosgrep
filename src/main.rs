@@ -17,7 +17,7 @@ fn main() -> io::Result<()> {
     ignore.add(&env::args().nth(3).unwrap_or(".ignore".into()))?;
     let ignore = Arc::new(ignore);
 
-    walk_dir(&path, &|entry: DirEntry| {
+    walk_dir(&path, &ignore, &|entry: DirEntry| {
         let path = entry.path().to_str().unwrap().to_string();
         let ignore = ignore.clone();
         let regex = regex.clone();
@@ -31,7 +31,7 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn walk_dir<F>(path: &str, cb: &F) -> ()
+fn walk_dir<F>(path: &str, ignores: &GitIgnore, cb: &F) -> ()
 where
     F: Fn(DirEntry) -> (),
 {
@@ -48,9 +48,13 @@ where
                 if specials.iter().any(|pattern| &path == pattern) {
                     continue;
                 }
+
+                if ignores.ignored(&path) {
+                    continue;
+                }
                 cb(entry);
                 if is_dir {
-                    walk_dir(&path, cb);
+                    walk_dir(&path, ignores, cb);
                 }
             }
         }
@@ -114,8 +118,14 @@ impl GitIgnore {
         Ok(o)
     }
 
-    pub fn ignored(&self, path: &str) -> bool {
-        self.ignores.iter().any(|ignore| ignore.matches(path))
+    pub fn ignored(&self, path: &String) -> bool {
+        let res = self.ignores.iter().any(|ignore| ignore.matches(&path));
+
+        if res {
+            eprintln!("ignored! {}", path)
+        };
+
+        res
     }
 
     pub fn add(&mut self, path: &str) -> Result<(), io::Error> {
@@ -141,4 +151,12 @@ impl GitIgnore {
         };
         Ok(ignores)
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ignored() {}
 }
