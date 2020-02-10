@@ -13,7 +13,7 @@ description = "A simple grep clone for developers"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-threadpool = "*"
+threadpool = "1"
 regex = "1"
-content_inspector = "*"
-glob = "*"
+content_inspector = "0"
+glob = "0"
