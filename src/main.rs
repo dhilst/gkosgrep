@@ -1,6 +1,7 @@
-extern crate regex;
+#![feature(test)]
+
+extern crate test;
 use content_inspector::inspect;
-use regex::Regex;
 use std::env;
 use std::fs::{self, DirEntry, File};
 use std::io::{self, prelude::*, BufReader, ErrorKind};
@@ -12,15 +13,15 @@ static THREAD_NUM: usize = 4;
 fn main() -> io::Result<()> {
     let pool = ThreadPool::new(THREAD_NUM);
     let path = env::args().nth(1).expect("1th argument not provided");
-    let regex = Arc::new(Regex::new(&env::args().nth(2).unwrap_or(String::from(".*"))).unwrap());
+    let pattern = env::args().nth(2).unwrap_or(".*".to_string());
     let ignore = Arc::new(GitIgnore::new(vec![".gitignore", ".ignore"]).unwrap());
 
     walk_dir(path, &ignore, &|entry: DirEntry| {
         let path = entry.path().to_str().unwrap().to_string();
         let ignore = ignore.clone();
-        let regex = regex.clone();
+        let pattern = pattern.clone();
         if entry.path().is_file() && !ignore.ignored(&path) {
-            pool.execute(move || grep_file(&regex, &path));
+            pool.execute(move || grep_file(&pattern, &path));
         }
     });
 
@@ -63,7 +64,7 @@ where
     }
 }
 
-fn grep_file(regex: &Regex, path: &str) {
+fn grep_file(pattern: &String, path: &str) {
     let file = File::open(path).unwrap();
     let reader = BufReader::new(file);
     let mut iter = reader.lines().enumerate();
@@ -84,7 +85,7 @@ fn grep_file(regex: &Regex, path: &str) {
     if !inspect(line2.as_bytes()).is_text() {
         return;
     }
-    if regex.is_match(&line) {
+    if pattern.contains(&line) {
         println!("{}:{}:{}", path, 0, line);
     }
     for (i, line) in iter {
@@ -98,7 +99,7 @@ fn grep_file(regex: &Regex, path: &str) {
             }
             Ok(line) => line,
         };
-        if regex.is_match(&line) {
+        if pattern.contains(&line) {
             println!("{}:{}:{}", path, i, line);
         }
     }
@@ -160,6 +161,8 @@ impl GitIgnore {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use test::Bencher;
     #[test]
     fn test_ignored() {
         use super::*;
@@ -169,5 +172,25 @@ mod tests {
             .map(|x| to_glob(&x))
             .collect::<Vec<glob::Pattern>>();
         assert!(igns.iter().any(|file| file.matches("./roles/freeipa/")))
+    }
+
+    #[bench]
+    fn bench_ignores(b: &mut Bencher) {
+        let igns = vec!["roles/freeipa/"]
+            .iter()
+            .map(|x| x.to_string())
+            .map(|x| to_glob(&x))
+            .collect::<Vec<glob::Pattern>>();
+        b.iter(|| igns.iter().any(|file| file.matches("./roles/freeipa/")))
+    }
+
+    #[bench]
+    fn bench_grep(b: &mut Bencher) {
+        b.iter(|| grep_file(&"and".to_string(), "./test/text.txt"))
+    }
+
+    #[bench]
+    fn bench_walkdir(b: &mut Bencher) {
+        b.iter(|| walk_dir("./src/".into(), &GitIgnore::new(vec![]).unwrap(), &|_| ()))
     }
 }
