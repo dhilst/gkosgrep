@@ -13,11 +13,9 @@ fn main() -> io::Result<()> {
     let pool = ThreadPool::new(THREAD_NUM);
     let path = env::args().nth(1).expect("1th argument not provided");
     let regex = Arc::new(Regex::new(&env::args().nth(2).unwrap_or(String::from(".*"))).unwrap());
-    let mut ignore = GitIgnore::new(".gitignore").unwrap();
-    ignore.add(&env::args().nth(3).unwrap_or(".ignore".into()))?;
-    let ignore = Arc::new(ignore);
+    let ignore = Arc::new(GitIgnore::new(vec![".gitignore", ".ignore"]).unwrap());
 
-    walk_dir(&path, &ignore, &|entry: DirEntry| {
+    walk_dir(path, &ignore, &|entry: DirEntry| {
         let path = entry.path().to_str().unwrap().to_string();
         let ignore = ignore.clone();
         let regex = regex.clone();
@@ -31,34 +29,37 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn walk_dir<F>(path: &str, ignores: &GitIgnore, cb: &F) -> ()
+fn walk_dir<F>(path: String, ignores: &GitIgnore, cb: &F) -> ()
 where
     F: Fn(DirEntry) -> (),
 {
     let specials = ["./.", "./..", "./.git"];
-    match fs::read_dir(path) {
-        Ok(readdir) => {
-            for entry in readdir {
-                if entry.is_err() {
-                    continue;
-                }
-                let entry = entry.unwrap();
-                let is_dir = entry.path().is_dir();
-                let path = entry.path().to_str().unwrap().to_string();
-                if specials.iter().any(|pattern| &path == pattern) {
-                    continue;
-                }
+    if !ignores.ignored(&format!("{}/", path)) && !specials.iter().any(|pattern| &path == pattern) {
+        match fs::read_dir(&path) {
+            Ok(readdir) => {
+                for entry in readdir {
+                    if entry.is_err() {
+                        continue;
+                    }
+                    let entry = entry.unwrap();
+                    let is_dir = entry.path().is_dir();
+                    let path = entry.path().to_str().unwrap().to_string();
+                    if specials.iter().any(|pattern| &path == pattern) {
+                        continue;
+                    }
 
-                if ignores.ignored(&path) {
-                    continue;
-                }
-                cb(entry);
-                if is_dir {
-                    walk_dir(&path, ignores, cb);
+                    if ignores.ignored(&path) {
+                        continue;
+                    }
+
+                    cb(entry);
+                    if is_dir {
+                        walk_dir(path, ignores, cb);
+                    }
                 }
             }
+            Err(e) => eprintln!("ERROR: {:?} {} {}", e.kind(), e, path),
         }
-        Err(e) => eprintln!("ERROR: {:?} {} {}", e.kind(), e, path),
     }
 }
 
@@ -103,18 +104,38 @@ fn grep_file(regex: &Regex, path: &str) {
     }
 }
 
+fn to_glob(ign: &String) -> glob::Pattern {
+    let ign = format!(
+        "./{}{}",
+        ign,
+        match ign.chars().last() {
+            None => "",
+            Some(a) =>
+                if a == '/' {
+                    "**"
+                } else {
+                    ""
+                },
+        }
+    );
+    glob::Pattern::new(&ign).unwrap()
+}
+
 #[derive(Debug)]
 struct GitIgnore {
     ignores: Vec<glob::Pattern>,
 }
 
 impl GitIgnore {
-    pub fn new(path: &str) -> Result<Self, io::Error> {
-        let mut o = GitIgnore {
-            ignores: Vec::new(),
+    pub fn new(paths: Vec<&str>) -> Result<Self, io::Error> {
+        let o = GitIgnore {
+            ignores: paths
+                .iter()
+                .map(|x| Self::open(x))
+                .flatten()
+                .flatten()
+                .collect(),
         };
-        o.add(path)?;
-
         Ok(o)
     }
 
@@ -123,40 +144,38 @@ impl GitIgnore {
 
         if res {
             eprintln!("ignored! {}", path)
+        } else {
+            eprintln!("included! {}", path)
         };
 
         res
     }
 
-    pub fn add(&mut self, path: &str) -> Result<(), io::Error> {
-        let mut f = Self::open(path)?;
-        self.ignores.append(&mut f);
-
-        Ok(())
-    }
-
     fn open(path: &str) -> Result<Vec<glob::Pattern>, io::Error> {
-        let ignores = match File::open(path) {
-            Err(e) => {
-                match e.kind() {
-                    ErrorKind::NotFound => {}
-                    _ => eprintln!("ERROR: Error opening {} {} {:?}", path, e, e.kind()),
-                };
-                Vec::new()
-            }
-            Ok(f) => BufReader::new(f)
+        match File::open(path) {
+            Err(e) => match e.kind() {
+                ErrorKind::NotFound => Ok(vec![]),
+                _ => Err(e),
+            },
+            Ok(f) => Ok(BufReader::new(f)
                 .lines()
-                .map(|pattern| glob::Pattern::new(&format!("./{}", pattern.unwrap())).unwrap())
-                .collect::<Vec<glob::Pattern>>(),
-        };
-        Ok(ignores)
+                .map(|x| x.unwrap())
+                .map(|x| to_glob(&x))
+                .collect()),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
-    fn test_ignored() {}
+    fn test_ignored() {
+        use super::*;
+        let igns = vec!["roles/freeipa/"]
+            .iter()
+            .map(|x| x.to_string())
+            .map(|x| to_glob(&x))
+            .collect::<Vec<glob::Pattern>>();
+        assert!(igns.iter().any(|file| file.matches("./roles/freeipa/")))
+    }
 }
