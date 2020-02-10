@@ -140,15 +140,7 @@ impl GitIgnore {
     }
 
     pub fn ignored(&self, path: &String) -> bool {
-        let res = self.ignores.iter().any(|ignore| ignore.matches(&path));
-
-        if res {
-            eprintln!("ignored! {}", path)
-        } else {
-            eprintln!("included! {}", path)
-        };
-
-        res
+        self.ignores.iter().any(|ignore| ignore.matches(&path));
     }
 
     fn open(path: &str) -> Result<Vec<glob::Pattern>, io::Error> {
