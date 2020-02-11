@@ -85,7 +85,7 @@ fn grep_file(pattern: &String, path: &str) {
     if !inspect(line2.as_bytes()).is_text() {
         return;
     }
-    if pattern.contains(&line) {
+    if line.contains(pattern) {
         println!("{}:{}:{}", path, 0, line);
     }
     for (i, line) in iter {
@@ -99,7 +99,7 @@ fn grep_file(pattern: &String, path: &str) {
             }
             Ok(line) => line,
         };
-        if pattern.contains(&line) {
+        if line.contains(pattern) {
             println!("{}:{}:{}", path, i, line);
         }
     }
