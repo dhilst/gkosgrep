@@ -2,35 +2,36 @@
 
 extern crate test;
 use content_inspector::inspect;
+use glob::glob;
 use std::env;
 use std::fs::{self, DirEntry, File};
 use std::io::{self, prelude::*, BufReader, ErrorKind};
 use std::sync::Arc;
-use threadpool::ThreadPool;
-
-static THREAD_NUM: usize = 4;
 
 fn main() -> io::Result<()> {
-    let pool = ThreadPool::new(THREAD_NUM);
     let path = env::args().nth(1).expect("1th argument not provided");
     let pattern = env::args().nth(2).unwrap_or(".*".to_string());
-    let ignore = Arc::new(GitIgnore::new(vec![".gitignore", ".ignore"]).unwrap());
+    let ignore = vec![".gitignore", ".ignore"];
+
+    run(&path, &pattern, ignore)
+}
+
+fn run(path: &String, pattern: &String, ignores: Vec<&str>) -> io::Result<()> {
+    let ignore = Arc::new(GitIgnore::new(ignores).unwrap());
 
     walk_dir(path, &ignore, &|entry: DirEntry| {
         let path = entry.path().to_str().unwrap().to_string();
         let ignore = ignore.clone();
         let pattern = pattern.clone();
         if entry.path().is_file() && !ignore.ignored(&path) {
-            pool.execute(move || grep_file(&pattern, &path));
+            grep_file(&pattern, &path);
         }
     });
-
-    pool.join();
 
     Ok(())
 }
 
-fn walk_dir<F>(path: String, ignores: &GitIgnore, cb: &F) -> ()
+fn walk_dir<F>(path: &str, ignores: &GitIgnore, cb: &F) -> ()
 where
     F: Fn(DirEntry) -> (),
 {
@@ -55,7 +56,7 @@ where
 
                     cb(entry);
                     if is_dir {
-                        walk_dir(path, ignores, cb);
+                        walk_dir(&path, ignores, cb);
                     }
                 }
             }
@@ -66,7 +67,7 @@ where
 
 fn grep_file(pattern: &String, path: &str) {
     let file = File::open(path).unwrap();
-    let reader = BufReader::new(file);
+    let reader = BufReader::with_capacity(4 * 1024 * 1024, file);
     let mut iter = reader.lines().enumerate();
     let (_, line) = match iter.next() {
         None => return,
@@ -162,6 +163,7 @@ impl GitIgnore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use test::Bencher;
     #[test]
     fn test_ignored() {
@@ -186,11 +188,29 @@ mod tests {
 
     #[bench]
     fn bench_grep(b: &mut Bencher) {
-        b.iter(|| grep_file(&"and".to_string(), "./test/text.txt"))
+        b.iter(|| {
+            grep_file(
+                &"and".to_string(),
+                "/home/dhilst/Downloads/cantrbry/alice29.txt",
+            )
+        })
     }
 
     #[bench]
     fn bench_walkdir(b: &mut Bencher) {
         b.iter(|| walk_dir("./src/".into(), &GitIgnore::new(vec![]).unwrap(), &|_| ()))
+    }
+
+    #[bench]
+    fn bench_kernel(b: &mut Bencher) {
+        let src = env::var("KERNEL_SRC")
+            .expect("KERNEL_SRC not set up")
+            .to_string();
+        let src = Path::new(&src);
+        let src = Arc::new(src.join(".gitignore").to_str().unwrap().to_string());
+        let gign = Arc::new(vec![src.as_str()]);
+        let pat = "struct".to_string();
+
+        b.iter(|| run(&src.clone(), &pat, gign.to_vec()))
     }
 }
