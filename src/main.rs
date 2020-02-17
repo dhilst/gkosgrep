@@ -2,11 +2,15 @@
 
 extern crate test;
 use content_inspector::inspect;
-use glob::glob;
+use glob;
 use std::env;
 use std::fs::{self, DirEntry, File};
 use std::io::{self, prelude::*, BufReader, ErrorKind};
+use std::path::Path;
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
+use std::thread;
+use threadpool::ThreadPool;
 
 fn main() -> io::Result<()> {
     let path = env::args().nth(1).expect("1th argument not provided");
@@ -18,15 +22,17 @@ fn main() -> io::Result<()> {
 
 fn run(path: &String, pattern: &String, ignores: Vec<&str>) -> io::Result<()> {
     let ignore = Arc::new(GitIgnore::new(ignores).unwrap());
+    let pool = ThreadPool::new(8);
 
-    walk_dir(path, &ignore, &|entry: DirEntry| {
+    walk_dir(&path, &ignore, &|entry: DirEntry| {
         let path = entry.path().to_str().unwrap().to_string();
-        let ignore = ignore.clone();
         let pattern = pattern.clone();
-        if entry.path().is_file() && !ignore.ignored(&path) {
-            grep_file(&pattern, &path);
+        if entry.path().is_file() {
+            pool.execute(move || grep_file(&pattern, &path));
         }
     });
+
+    pool.join();
 
     Ok(())
 }
@@ -35,8 +41,10 @@ fn walk_dir<F>(path: &str, ignores: &GitIgnore, cb: &F) -> ()
 where
     F: Fn(DirEntry) -> (),
 {
-    let specials = ["./.", "./..", "./.git"];
-    if !ignores.ignored(&format!("{}/", path)) && !specials.iter().any(|pattern| &path == pattern) {
+    let specials = [".git/"];
+    if !ignores.ignored(&format!("{}/", path))
+        && !specials.iter().any(|pattern| path.contains(pattern))
+    {
         match fs::read_dir(&path) {
             Ok(readdir) => {
                 for entry in readdir {
@@ -46,7 +54,7 @@ where
                     let entry = entry.unwrap();
                     let is_dir = entry.path().is_dir();
                     let path = entry.path().to_str().unwrap().to_string();
-                    if specials.iter().any(|pattern| &path == pattern) {
+                    if specials.iter().any(|pattern| path.contains(pattern)) {
                         continue;
                     }
 
@@ -55,6 +63,7 @@ where
                     }
 
                     cb(entry);
+
                     if is_dir {
                         walk_dir(&path, ignores, cb);
                     }
@@ -62,12 +71,17 @@ where
             }
             Err(e) => eprintln!("ERROR: {:?} {} {}", e.kind(), e, path),
         }
+    } else {
     }
+}
+
+fn println(path: &str, linum: usize, line: &str) {
+    println!("{}:{}:{}", path, linum, line);
 }
 
 fn grep_file(pattern: &String, path: &str) {
     let file = File::open(path).unwrap();
-    let reader = BufReader::with_capacity(4 * 1024 * 1024, file);
+    let reader = BufReader::with_capacity(8 * 1024, file);
     let mut iter = reader.lines().enumerate();
     let (_, line) = match iter.next() {
         None => return,
@@ -87,7 +101,7 @@ fn grep_file(pattern: &String, path: &str) {
         return;
     }
     if line.contains(pattern) {
-        println!("{}:{}:{}", path, 0, line);
+        println(path, 0, &line);
     }
     for (i, line) in iter {
         let line = match line {
@@ -101,7 +115,7 @@ fn grep_file(pattern: &String, path: &str) {
             Ok(line) => line,
         };
         if line.contains(pattern) {
-            println!("{}:{}:{}", path, i, line);
+            println(path, i, &line);
         }
     }
 }
@@ -142,7 +156,9 @@ impl GitIgnore {
     }
 
     pub fn ignored(&self, path: &String) -> bool {
-        self.ignores.iter().any(|ignore| ignore.matches(&path))
+        self.ignores
+            .iter()
+            .any(|ignore| if ignore.matches(&path) { true } else { false })
     }
 
     fn open(path: &str) -> Result<Vec<glob::Pattern>, io::Error> {
@@ -173,7 +189,26 @@ mod tests {
             .map(|x| x.to_string())
             .map(|x| to_glob(&x))
             .collect::<Vec<glob::Pattern>>();
-        assert!(igns.iter().any(|file| file.matches("./roles/freeipa/")))
+        assert!(igns.iter().any(|file| file.matches("./roles/freeipa/")));
+
+        let igns = vec!["./target/**"]
+            .iter()
+            .map(|x| x.to_string())
+            .map(|x| to_glob(&x))
+            .collect::<Vec<glob::Pattern>>();
+        assert!(!igns
+            .iter()
+            .any(|file| file.matches("../linux/arch/arc/kernel/stacktrace.c")));
+    }
+
+    #[test]
+    fn test_glob() {
+        assert_eq!(
+            false,
+            glob::Pattern::new("./target/**")
+                .unwrap()
+                .matches("../target/foo/bar")
+        );
     }
 
     #[bench]
@@ -197,20 +232,37 @@ mod tests {
     }
 
     #[bench]
+    fn bench_alice(b: &mut Bencher) {
+        let gign = vec![] as Vec<&str>;
+        let pat = "and".to_string();
+        b.iter(|| run(&"./test".to_string(), &pat, gign.to_vec()));
+    }
+
+    #[bench]
     fn bench_walkdir(b: &mut Bencher) {
-        b.iter(|| walk_dir("./src/".into(), &GitIgnore::new(vec![]).unwrap(), &|_| ()))
+        b.iter(|| walk_dir("./src/".into(), &GitIgnore::new(vec![]).unwrap(), &|_| ()));
     }
 
     #[bench]
     fn bench_kernel(b: &mut Bencher) {
-        let src = env::var("KERNEL_SRC")
+        let ksrc = env::var("KERNEL_SRC")
             .expect("KERNEL_SRC not set up")
             .to_string();
-        let src = Path::new(&src);
+        let src = Path::new(&ksrc);
         let src = Arc::new(src.join(".gitignore").to_str().unwrap().to_string());
         let gign = Arc::new(vec![src.as_str()]);
         let pat = "struct".to_string();
 
-        b.iter(|| run(&src.clone(), &pat, gign.to_vec()))
+        b.iter(|| {
+            run(
+                &Path::new(&ksrc)
+                    .join("arch/arm")
+                    .to_str()
+                    .unwrap()
+                    .to_string(),
+                &pat,
+                gign.to_vec(),
+            )
+        })
     }
 }
