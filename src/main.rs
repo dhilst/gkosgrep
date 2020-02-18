@@ -1,4 +1,7 @@
 #![feature(test)]
+#![feature(async_closure)]
+#![feature(rustc_private)]
+#[macro_use] extern crate log;
 
 extern crate test;
 use content_inspector::inspect;
@@ -6,21 +9,19 @@ use glob;
 use std::env;
 use std::fs::{self, DirEntry, File};
 use std::io::{self, prelude::*, BufReader, ErrorKind};
-use std::path::Path;
-use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
-use std::thread;
 use threadpool::ThreadPool;
+use regex;
 
 fn main() -> io::Result<()> {
     let path = env::args().nth(1).expect("1th argument not provided");
     let pattern = env::args().nth(2).unwrap_or(".*".to_string());
-    let ignore = vec![".gitignore", ".ignore"];
+    let ignore = vec![".gitignore", ".ignore"].iter().map(|x| format!("{}/{}", path, x)).collect();
 
     run(&path, &pattern, ignore)
 }
 
-fn run(path: &String, pattern: &String, ignores: Vec<&str>) -> io::Result<()> {
+fn run(path: &String, pattern: &String, ignores: Vec<String>) -> io::Result<()> {
     let ignore = Arc::new(GitIgnore::new(ignores).unwrap());
     let pool = ThreadPool::new(8);
 
@@ -143,7 +144,7 @@ struct GitIgnore {
 }
 
 impl GitIgnore {
-    pub fn new(paths: Vec<&str>) -> Result<Self, io::Error> {
+    pub fn new(paths: Vec<String>) -> Result<Self, io::Error> {
         let o = GitIgnore {
             ignores: paths
                 .iter()
@@ -158,20 +159,28 @@ impl GitIgnore {
     pub fn ignored(&self, path: &String) -> bool {
         self.ignores
             .iter()
-            .any(|ignore| if ignore.matches(&path) { true } else { false })
+            .any(|ignore| if ignore.matches(&path) { debug!("IGNORED {} by {}", path, ignore); true } else { false })
     }
 
     fn open(path: &str) -> Result<Vec<glob::Pattern>, io::Error> {
+        let empty_line = regex::Regex::new(r"^\s*$").unwrap();
+        let comment = regex::Regex::new(r"#.*$").unwrap();
         match File::open(path) {
             Err(e) => match e.kind() {
                 ErrorKind::NotFound => Ok(vec![]),
                 _ => Err(e),
             },
-            Ok(f) => Ok(BufReader::new(f)
+            Ok(f) => {
+                let lines = BufReader::new(f)
                 .lines()
                 .map(|x| x.unwrap())
+                .filter(|x| !empty_line.is_match(x))
+                .map(|x| comment.replace(&x, "").into_owned())
                 .map(|x| to_glob(&x))
-                .collect()),
+                .collect();
+
+                Ok(lines)
+            }
         }
     }
 }
@@ -213,9 +222,13 @@ mod tests {
 
     #[bench]
     fn bench_ignores(b: &mut Bencher) {
+        let comment = regex::Regex::new(r"\s*#?\s*").unwrap();
+        let empty_line = regex::Regex::new(r"^\s*$").unwrap();
         let igns = vec!["roles/freeipa/"]
             .iter()
             .map(|x| x.to_string())
+            .filter(|x| !comment.is_match(x))
+            .filter(|x| !empty_line.is_match(x))
             .map(|x| to_glob(&x))
             .collect::<Vec<glob::Pattern>>();
         b.iter(|| igns.iter().any(|file| file.matches("./roles/freeipa/")))
@@ -264,5 +277,35 @@ mod tests {
                 gign.to_vec(),
             )
         })
+    }
+
+    #[bench]
+    fn test_async(b: &mut Bencher) {
+        use futures::executor::block_on;
+        use async_std::prelude::*;
+        use async_std::fs::{self,*};
+        use std::marker::Sync;
+        use futures::future::{BoxFuture, FutureExt};
+
+        fn walkdir<F>(path: String, cb: &'static F) -> BoxFuture<'static, ()> where F: Fn(&DirEntry) -> BoxFuture<()> + Sync + Send {
+            async move {
+                let mut entries = fs::read_dir(&path).await.unwrap();
+                while let Some(path) = entries.next().await {
+                    let entry = path.unwrap(); 
+                    let path = entry.path().to_str().unwrap().to_string();
+                    if entry.path().is_file().await {
+                        cb(&entry).await
+                    } else {
+                        walkdir(path, cb).await
+                    }
+                }
+            }.boxed()
+        }
+
+        let foo = async {
+            //walkdir(".".to_string(), &|entry: &DirEntry| async { async_std::println!(">> {}\n", &entry.path().to_str().unwrap()).await } ).await
+        };
+
+        block_on(foo);
     }
 }
