@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use log;
 use std::env;
 use std::error;
