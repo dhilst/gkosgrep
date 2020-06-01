@@ -139,6 +139,10 @@ pub fn walkdir(root: &path::Path, pattern: &str) -> Result<(), Box<dyn error::Er
         if let Ok(i) = read_gitignore(dir.as_path(), ".gitignore") {
             gitignores.push(i);
         }
+
+        if let Ok(i) = read_gitignore(dir.as_path(), ".ignore") {
+            gitignores.push(i);
+        }
         for entry in fs::read_dir(dir.as_path())? {
             let entry = entry?;
             let ignored =
