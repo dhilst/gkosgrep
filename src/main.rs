@@ -8,39 +8,6 @@ use std::io::{self, BufRead};
 use std::path;
 
 #[derive(Debug)]
-struct GitIgnore(Vec<String>);
-
-fn is_pattern(line: &str) -> bool {
-    if line.starts_with("#") {
-        return false;
-    }
-
-    if line.trim().is_empty() {
-        return false;
-    }
-
-    return true;
-}
-
-fn read_gitignore(
-    root: &path::Path,
-    gitignore_name: &str,
-) -> Result<GitIgnore, Box<dyn error::Error>> {
-    let file = fs::File::open(path::Path::join(root, gitignore_name))?;
-    let file = io::BufReader::new(file);
-    let mut patterns = Vec::new();
-
-    for line in file.lines() {
-        let line = line?;
-        if is_pattern(&line) {
-            patterns.push(line.trim().to_string());
-        }
-    }
-
-    Ok(GitIgnore(patterns))
-}
-
-#[derive(Debug)]
 struct Pattern {
     neg: bool,
     pattern: glob::Pattern,
@@ -72,7 +39,40 @@ fn to_pattern(pattern: &str) -> Result<Pattern, Box<dyn error::Error>> {
     Ok(Pattern { neg, pattern })
 }
 
-fn matches(pattern: Pattern, target: &path::Path) -> bool {
+#[derive(Debug)]
+struct GitIgnore(Vec<Pattern>);
+
+fn is_pattern(line: &str) -> bool {
+    if line.starts_with("#") {
+        return false;
+    }
+
+    if line.trim().is_empty() {
+        return false;
+    }
+
+    return true;
+}
+
+fn read_gitignore(
+    root: &path::Path,
+    gitignore_name: &str,
+) -> Result<GitIgnore, Box<dyn error::Error>> {
+    let file = fs::File::open(path::Path::join(root, gitignore_name))?;
+    let file = io::BufReader::new(file);
+    let mut patterns = Vec::new();
+
+    for line in file.lines() {
+        let line = line?;
+        if is_pattern(&line) {
+            patterns.push(to_pattern(&line.trim().to_string())?);
+        }
+    }
+
+    Ok(GitIgnore(patterns))
+}
+
+fn matches(pattern: &Pattern, target: &path::Path) -> bool {
     let mut target_ = target.to_str().unwrap().to_string().replace("./", "");
     if target.is_dir() {
         target_.push_str("/");
@@ -101,8 +101,7 @@ fn ignored(
 ) -> Result<bool, Box<dyn error::Error>> {
     for gitignore in gitignores.iter().rev() {
         for pattern in &gitignore.0 {
-            let pattern = to_pattern(&pattern)?;
-            let matches = matches(pattern, target);
+            let matches = matches(&pattern, target);
             if matches {
                 return Ok(true);
             }
