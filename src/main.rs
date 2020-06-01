@@ -165,7 +165,11 @@ pub fn walkdir(root: &path::Path, pattern: &str) -> Result<(), Box<dyn error::Er
 fn main() -> Result<(), Box<dyn error::Error>> {
     let path = env::args().nth(1).unwrap();
     let path = path::Path::new(&path);
-    let pattern = env::args().nth(2).unwrap();
+    let pattern = env::args().nth(2);
+    if pattern.is_none() {
+        return Ok(());
+    }
+    let pattern = pattern.unwrap();
     walkdir(path, &pattern)?;
 
     Ok(())
