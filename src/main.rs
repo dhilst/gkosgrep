@@ -122,7 +122,7 @@ fn grep_file(path: &path::Path, pattern: &str) {
         }
         let line = line.unwrap();
         if line.contains(pattern) {
-            println!("{}:{}:{}", i, path.to_str().unwrap(), line);
+            println!("{}:{}:{}", path.to_str().unwrap(), i + 1, line);
         }
     }
 }
