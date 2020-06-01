@@ -1,3 +1,4 @@
+use env_logger;
 use log;
 use std::env;
 use std::error;
@@ -5,13 +6,7 @@ use std::fs;
 use std::io::{self, BufRead};
 use std::path;
 
-#[derive(Debug)]
-struct Pattern {
-    neg: bool,
-    pattern: glob::Pattern,
-}
-
-fn to_pattern(pattern: &str) -> Result<Pattern, Box<dyn error::Error>> {
+fn to_pattern(pattern: &str) -> Result<(bool, glob::Pattern), Box<dyn error::Error>> {
     let mut neg = false;
     let mut recursive = true;
     let mut pattern: String = pattern.to_string();
@@ -34,11 +29,15 @@ fn to_pattern(pattern: &str) -> Result<Pattern, Box<dyn error::Error>> {
 
     log::debug!("Compiling {}", pattern);
     let pattern = glob::Pattern::new(&pattern)?;
-    Ok(Pattern { neg, pattern })
+
+    Ok((neg, pattern))
 }
 
 #[derive(Debug)]
-struct GitIgnore(Vec<Pattern>);
+struct GitIgnore {
+    patterns: Vec<glob::Pattern>,
+    neg_patterns: Vec<glob::Pattern>,
+}
 
 fn is_pattern(line: &str) -> bool {
     if line.starts_with("#") {
@@ -59,38 +58,40 @@ fn read_gitignore(
     let file = fs::File::open(path::Path::join(root, gitignore_name))?;
     let file = io::BufReader::new(file);
     let mut patterns = Vec::new();
+    let mut neg_patterns = Vec::new();
 
     for line in file.lines() {
         let line = line?;
         if is_pattern(&line) {
-            patterns.push(to_pattern(&line.trim().to_string())?);
+            let (neg, pattern) = to_pattern(&line.trim().to_string())?;
+            if neg {
+                neg_patterns.push(pattern);
+            } else {
+                patterns.push(pattern);
+            }
         }
     }
 
-    Ok(GitIgnore(patterns))
+    log::debug!("{}/{} read", root.to_str().unwrap(), gitignore_name);
+
+    Ok(GitIgnore {
+        patterns,
+        neg_patterns,
+    })
 }
 
-fn matches(pattern: &Pattern, target: &path::Path) -> bool {
+fn matches(pattern: &glob::Pattern, target: &path::Path) -> bool {
     let mut target_ = target.to_str().unwrap().to_string().replace("./", "");
     if target.is_dir() {
         target_.push_str("/");
     }
-    let res = pattern.pattern.matches(&target_);
+    let res = pattern.matches(&target_);
 
     if res {
-        log::debug!(
-            "Ignored {:?} {:?} => {:?}",
-            pattern.pattern.as_str(),
-            target_,
-            res
-        );
+        log::debug!("Ignored {:?} {:?} => {:?}", pattern.as_str(), target_, res);
     }
 
-    if pattern.neg {
-        !res
-    } else {
-        res
-    }
+    res
 }
 
 fn ignored(
@@ -98,9 +99,13 @@ fn ignored(
     gitignores: &Vec<GitIgnore>,
 ) -> Result<bool, Box<dyn error::Error>> {
     for gitignore in gitignores.iter().rev() {
-        for pattern in &gitignore.0 {
-            let matches = matches(&pattern, target);
-            if matches {
+        for pattern in &gitignore.patterns {
+            if matches(&pattern, target) {
+                for neg_pattern in &gitignore.neg_patterns {
+                    if matches(neg_pattern, target) {
+                        return Ok(false);
+                    }
+                }
                 return Ok(true);
             }
         }
@@ -143,6 +148,7 @@ pub fn walkdir(root: &path::Path, pattern: &str) -> Result<(), Box<dyn error::Er
         }
         for entry in fs::read_dir(dir.as_path())? {
             let entry = entry?;
+            log::debug!("Visiting {}", entry.path().to_str().unwrap());
             let ignored =
                 ignored(&entry.path(), &gitignores)? || entry.path().to_str().unwrap() == "./.git";
 
@@ -161,6 +167,7 @@ pub fn walkdir(root: &path::Path, pattern: &str) -> Result<(), Box<dyn error::Er
 }
 
 fn main() -> Result<(), Box<dyn error::Error>> {
+    env_logger::init();
     let path = env::args().nth(1).unwrap();
     let path = path::Path::new(&path);
     let pattern = env::args().nth(2);
