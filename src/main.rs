@@ -7,6 +7,7 @@ use std::io::{self, BufRead};
 use std::path;
 
 fn to_pattern(pattern: &str) -> Result<(bool, glob::Pattern), Box<dyn error::Error>> {
+    let original = pattern;
     let mut neg = false;
     let mut recursive = true;
     let mut pattern: String = pattern.to_string();
@@ -25,16 +26,20 @@ fn to_pattern(pattern: &str) -> Result<(bool, glob::Pattern), Box<dyn error::Err
         pattern.push_str(if recursive { "**" } else { "*" });
     }
 
-    pattern.insert_str(0, if recursive { "**/" } else { "*/" });
+    if recursive {
+        pattern.insert_str(0, "**/");
+    }
 
-    log::debug!("Compiling {}", pattern);
     let pattern = glob::Pattern::new(&pattern)?;
+
+    log::debug!("Compiling {} => {}", original, pattern.as_str());
 
     Ok((neg, pattern))
 }
 
 #[derive(Debug)]
 struct GitIgnore {
+    path: path::PathBuf,
     patterns: Vec<glob::Pattern>,
     neg_patterns: Vec<glob::Pattern>,
 }
@@ -52,10 +57,10 @@ fn is_pattern(line: &str) -> bool {
 }
 
 fn read_gitignore(
-    root: &path::Path,
+    root: path::PathBuf,
     gitignore_name: &str,
 ) -> Result<GitIgnore, Box<dyn error::Error>> {
-    let file = fs::File::open(path::Path::join(root, gitignore_name))?;
+    let file = fs::File::open(path::Path::join(root.as_path(), gitignore_name))?;
     let file = io::BufReader::new(file);
     let mut patterns = Vec::new();
     let mut neg_patterns = Vec::new();
@@ -75,6 +80,7 @@ fn read_gitignore(
     log::debug!("{}/{} read", root.to_str().unwrap(), gitignore_name);
 
     Ok(GitIgnore {
+        path: root,
         patterns,
         neg_patterns,
     })
@@ -86,23 +92,43 @@ fn matches(pattern: &glob::Pattern, target: &path::Path) -> bool {
         target_.push_str("/");
     }
     let res = pattern.matches(&target_);
-
-    if res {
-        log::debug!("Ignored {:?} {:?} => {:?}", pattern.as_str(), target_, res);
-    }
-
+    log::debug!(
+        "Checking {} ~ {} => {}",
+        target.to_str().unwrap(),
+        pattern.as_str(),
+        res
+    );
     res
+}
+
+fn in_dir(root: &path::Path, target: &path::Path) -> bool {
+    target.starts_with(root)
 }
 
 fn ignored(
     target: &path::Path,
     gitignores: &Vec<GitIgnore>,
 ) -> Result<bool, Box<dyn error::Error>> {
+    log::debug!("Gitignores count {}", gitignores.iter().count());
     for gitignore in gitignores.iter().rev() {
         for pattern in &gitignore.patterns {
+            if !in_dir(gitignore.path.as_path(), target) {
+                continue;
+            }
             if matches(&pattern, target) {
+                log::debug!(
+                    "{} ignored by {}",
+                    target.to_str().unwrap(),
+                    pattern.as_str()
+                );
                 for neg_pattern in &gitignore.neg_patterns {
                     if matches(neg_pattern, target) {
+                        log::debug!(
+                            "{} ignored by {}, but reincluded by {}",
+                            target.to_str().unwrap(),
+                            pattern.as_str(),
+                            neg_pattern.as_str()
+                        );
                         return Ok(false);
                     }
                 }
@@ -115,6 +141,11 @@ fn ignored(
 }
 
 fn grep_file(path: &path::Path, pattern: &str) {
+    let debug = env::var("RUST_LOG").is_ok();
+    if debug {
+        log::debug!("{} included", path.to_str().unwrap());
+        return;
+    }
     let file = fs::File::open(path);
     if file.is_err() {
         return;
@@ -139,11 +170,11 @@ pub fn walkdir(root: &path::Path, pattern: &str) -> Result<(), Box<dyn error::Er
 
     while !buf.is_empty() {
         let dir = buf.remove(0);
-        if let Ok(i) = read_gitignore(dir.as_path(), ".gitignore") {
+        if let Ok(i) = read_gitignore(dir.clone(), ".gitignore") {
             gitignores.push(i);
         }
 
-        if let Ok(i) = read_gitignore(dir.as_path(), ".ignore") {
+        if let Ok(i) = read_gitignore(dir.clone(), ".ignore") {
             gitignores.push(i);
         }
         for entry in fs::read_dir(dir.as_path())? {
@@ -152,7 +183,7 @@ pub fn walkdir(root: &path::Path, pattern: &str) -> Result<(), Box<dyn error::Er
             let ignored =
                 ignored(&entry.path(), &gitignores)? || entry.path().to_str().unwrap() == "./.git";
 
-            if !ignored {
+            if !ignored && entry.path().is_file() {
                 grep_file(&entry.path(), &pattern);
             }
 
@@ -160,7 +191,6 @@ pub fn walkdir(root: &path::Path, pattern: &str) -> Result<(), Box<dyn error::Er
                 buf.push(entry.path());
             }
         }
-        gitignores.pop();
     }
 
     Ok(())
@@ -195,5 +225,22 @@ mod tests {
         assert!(glob::Pattern::new("**/target/**")
             .unwrap()
             .matches("target/"));
+    }
+
+    #[test]
+    fn test_pattern2() {
+        env_logger::init();
+        env::set_current_dir("../mautic").unwrap();
+        let gitignore = read_gitignore(path::Path::new(".").to_path_buf(), ".gitignore").unwrap();
+        assert!(ignored(path::Path::new("app/cache/dev"), &vec![gitignore]).unwrap());
+    }
+
+    #[test]
+    fn test_in_dir() {
+        env::set_current_dir("../mautic").unwrap();
+        assert!(in_dir(
+            path::Path::new("."),
+            path::Path::new("./app/cache/dev"),
+        ));
     }
 }
