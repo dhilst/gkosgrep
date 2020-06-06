@@ -242,5 +242,7 @@ mod tests {
             path::Path::new("."),
             path::Path::new("./app/cache/dev"),
         ));
+
+        assert!(in_dir(path::Path::new("."), path::Path::new("."),));
     }
 }
