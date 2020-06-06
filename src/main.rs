@@ -5,6 +5,7 @@ use std::error;
 use std::fs;
 use std::io::{self, BufRead};
 use std::path;
+use std::sync;
 
 fn to_pattern(pattern: &str) -> Result<(bool, glob::Pattern), Box<dyn error::Error>> {
     let original = pattern;
@@ -166,6 +167,7 @@ fn grep_file(path: &path::Path, pattern: &str) {
 pub fn walkdir(root: &path::Path, pattern: &str) -> Result<(), Box<dyn error::Error>> {
     let mut buf: Vec<path::PathBuf> = Vec::new();
     let mut gitignores: Vec<GitIgnore> = Vec::new();
+    let pool = threadpool::ThreadPool::new(num_cpus::get());
     buf.push(root.into());
 
     while !buf.is_empty() {
@@ -184,7 +186,12 @@ pub fn walkdir(root: &path::Path, pattern: &str) -> Result<(), Box<dyn error::Er
                 ignored(&entry.path(), &gitignores)? || entry.path().to_str().unwrap() == "./.git";
 
             if !ignored && entry.path().is_file() {
-                grep_file(&entry.path(), &pattern);
+                let entry = sync::Arc::new(entry.path());
+                let pattern = sync::Arc::new(pattern.to_string());
+
+                pool.execute(move || {
+                    grep_file(&entry, &pattern);
+                });
             }
 
             if entry.path().is_dir() && !ignored {
