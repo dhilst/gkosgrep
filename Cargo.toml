@@ -1,6 +1,6 @@
 [package]
 name = "gkosgrep"
-version = "0.1.10"
+version = "0.1.11"
 authors = ["Daniel Hilst Selli <danielhilst@gmail.com>"]
 edition = "2018"
 license = "Apache-2.0"
@@ -13,7 +13,7 @@ description = "A simple grep clone for developers"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-glob = "0"
+glob = "0.3"
 log = "0.4"
 env_logger = "0.*"
 num_cpus = "1.*"
