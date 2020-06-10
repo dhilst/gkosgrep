@@ -37,3 +37,9 @@ If you (like me) want searches to ignore file names use this
       call fzf#vim#grep(initial_command, 0, fzf#vim#with_preview(spec), a:fullscreen)
     endfunction
     command! -nargs=* -bang GkosGrep call GkosGrepFzf(<q-args>, <bang>0)
+
+# Debugging
+
+```shell
+RUST_LOG cargo run -F debug_macros ./test/ foo
+```
