@@ -159,8 +159,7 @@ fn ignored(target: &path::Path, gitignores: &Vec<GitIgnore>) -> bool {
     false
 }
 
-fn grep_file(path: &path::Path, pattern: &str) {
-    let debug = env::var("RUST_LOG").is_ok();
+fn grep_file(path: &path::Path, pattern: &str, debug: bool) {
     if debug {
         log::debug!("{} included", path.to_str().unwrap());
         return;
@@ -185,6 +184,7 @@ fn grep_file(path: &path::Path, pattern: &str) {
 pub fn walkdir(root: &path::Path, pattern: &str) -> Result<(), Box<dyn error::Error>> {
     let mut buf: Vec<path::PathBuf> = Vec::new();
     let mut gitignores: Vec<GitIgnore> = Vec::new();
+    let debug = env::var("RUST_LOG").is_ok();
     let pool = threadpool::ThreadPool::new(num_cpus::get());
     buf.push(root.into());
 
@@ -208,7 +208,7 @@ pub fn walkdir(root: &path::Path, pattern: &str) -> Result<(), Box<dyn error::Er
                 let pattern = sync::Arc::new(pattern.to_string());
 
                 pool.execute(move || {
-                    grep_file(&entry, &pattern);
+                    grep_file(&entry, &pattern, debug);
                 });
             }
 
